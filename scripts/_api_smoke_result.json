@@ -1,0 +1,48 @@
+[
+  {
+    "health": {
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "redis": true
+      }
+    }
+  },
+  {
+    "chat": {
+      "status": 200,
+      "body": {
+        "reply": "Xin l\u1ed7i, t\u00f4i ch\u1ec9 c\u00f3 th\u1ec3 h\u1ed7 tr\u1ee3 v\u1ec1 **chu\u1ea9n b\u1ecb kh\u00e1m t\u1ea1i Vinmec** \u2014 nh\u01b0 nh\u1ecbn \u0103n, gi\u1ea5y t\u1edd c\u1ea7n mang, \u0111\u1eb7t l\u1ecbch, t\u00ecm c\u01a1 s\u1edf g\u1ea7n nh\u1ea5t, hay th\u1eafc m\u1eafc v\u1ec1 chuy\u00ean khoa. B\u1ea1n c\u00f3 mu\u1ed1n t\u00f4i gi\u00fap chu\u1ea9n b\u1ecb cho bu\u1ed5i kh\u00e1m kh\u00f4ng?",
+        "session_id": "45601682-b60f-407c-9f13-29e6b095e0ec",
+        "job_id": "d2380de4-0e60-482f-96ac-ed9a84ee3ebb",
+        "blocked": false,
+        "guard_result": "pass"
+      }
+    }
+  },
+  {
+    "feedback": {
+      "status": 200,
+      "body": {
+        "uuid": "12c264cc-fb53-4075-908b-ad00ddb045b2",
+        "session_id": "45601682-b60f-407c-9f13-29e6b095e0ec",
+        "rating": "like",
+        "saved": true
+      }
+    }
+  },
+  {
+    "feedback_end": {
+      "status": 200,
+      "body": {
+        "uuid": "730b7564-235c-4296-9ca9-78bf2d860c7c",
+        "session_id": "45601682-b60f-407c-9f13-29e6b095e0ec",
+        "rating": 5,
+        "saved": true
+      }
+    }
+  },
+  {
+    "trainer_tests": "skipped_no_key"
+  }
+]

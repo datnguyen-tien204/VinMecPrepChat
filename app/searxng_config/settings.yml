@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  SearXNG config cho VinmecPrep AI
+#
+#  FIX: Dùng keep_only thay vì use_default_settings: true + disabled: true
+#  vì "disabled: true" không ngăn SearXNG load file .py → FileNotFoundError
+#  với google images, youtube, torch (các engine không có file trong image này)
+# ─────────────────────────────────────────────────────────────────────────────
+
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - bing
+      - duckduckgo
+      - wikipedia
+      - wikidata
+      - pubmed
+
+general:
+  debug: false
+  instance_name: "VinmecPrep Search"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "vi-VN"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "${SEARXNG_SECRET_KEY:-changeme_searxng_secret_key}"
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+botdetection:
+  ip_limit:
+    filter_link_local: false
+    link_token: false
+  methods: []
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+
+# Tăng weight cho Google (độ liên quan tốt hơn với tiếng Việt)
+engines:
+  - name: google
+    weight: 2.0
+  - name: bing
+    weight: 1.5
+  - name: duckduckgo
+    weight: 1.0

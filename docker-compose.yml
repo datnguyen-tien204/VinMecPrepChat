@@ -1,0 +1,361 @@
+# ============================================================
+# VinmecPrep AI – Docker Compose (Day 12 / Lab 6 edition)
+#
+# Optimizations vs bản gốc:
+#   ✅ Bỏ version: field (deprecated Compose v2+)
+#   ✅ Resource limits cho mọi service
+#   ✅ Logging limits (json-file, max 10m × 3 files)
+#   ✅ Kafka 5 partitions (tăng từ 3) → tăng throughput
+#   ✅ Consumer replicas mặc định 5 (= số partitions)
+#   ✅ API scale qua `docker compose up --scale api=2`
+#   ✅ API_WORKERS=4 (uvicorn multi-process)
+#   ✅ Redis maxmemory + lru policy
+#   ✅ Healthcheck đầy đủ mọi service
+#   ✅ restart: unless-stopped
+#   ✅ depends_on condition: service_healthy
+#
+# Scale command:
+#   docker compose up --scale consumer=5 --scale api=2
+# ============================================================
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --maxmemory 1gb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+        --requirepass ${REDIS_PASSWORD:-changeme_redis_pass}
+        --bind 0.0.0.0
+        --tcp-keepalive 60
+        --tcp-backlog 511
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_redis_pass}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes: [redis_data:/data]
+    networks: [vinmec_net]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1.2G
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Kafka (KRaft – không cần Zookeeper) ────────────────
+  kafka:
+    image: bitnamilegacy/kafka:3.8
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_KRAFT_CLUSTER_ID: "vinmec-kafka-cluster-v2"
+      # Retention: 1 giờ / 512 MB (chat jobs không cần giữ lâu)
+      KAFKA_CFG_LOG_RETENTION_MS: "3600000"
+      KAFKA_CFG_LOG_RETENTION_BYTES: "536870912"
+      KAFKA_CFG_LOG_SEGMENT_BYTES: "67108864"
+      # Performance tuning
+      KAFKA_CFG_NUM_NETWORK_THREADS: "6"
+      KAFKA_CFG_NUM_IO_THREADS: "8"
+      KAFKA_CFG_SOCKET_SEND_BUFFER_BYTES: "102400"
+      KAFKA_CFG_SOCKET_RECEIVE_BUFFER_BYTES: "102400"
+      KAFKA_CFG_MAX_POLL_RECORDS: "500"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes: [kafka_data:/bitnami/kafka]
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [vinmec_net]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1.5G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Kafka topic init (5 partitions) ────────────────────
+  kafka-init:
+    image: bitnamilegacy/kafka:3.8
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        echo 'Creating Kafka topics (5 partitions)...';
+        BIN="kafka-topics.sh";
+        JOBS="${KAFKA_TOPIC_JOBS:-vinmec.chat.jobs}";
+        RESULTS="${KAFKA_TOPIC_RESULTS:-vinmec.chat.results}";
+        P="${KAFKA_PARTITIONS:-5}";
+        $$BIN --bootstrap-server kafka:9092 --create --if-not-exists \
+              --topic "$$JOBS"    --partitions "$$P" --replication-factor 1 \
+              --config retention.ms=3600000;
+        $$BIN --bootstrap-server kafka:9092 --create --if-not-exists \
+              --topic "$$RESULTS" --partitions "$$P" --replication-factor 1 \
+              --config retention.ms=3600000;
+        echo "kafka-init done: $$JOBS, $$RESULTS (partitions=$$P)";
+    networks: [vinmec_net]
+    restart: "no"
+
+  # ── Weaviate ────────────────────────────────────────────
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEAVIATE_HOST_HTTP_PORT:-8079}:8080"
+      - "127.0.0.1:${WEAVIATE_HOST_GRPC_PORT:-50061}:50051"
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      ENABLE_MODULES: ""
+      DEFAULT_VECTORIZER_MODULE: "none"
+      CLUSTER_HOSTNAME: "weaviate-node1"
+      LOG_LEVEL: "info"
+    volumes: [weaviate_data:/var/lib/weaviate]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [vinmec_net]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── SearXNG ─────────────────────────────────────────────
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-changeme_searxng_secret}
+      - SEARXNG_BASE_URL=http://searxng:8080
+    volumes:
+      - ./app/searxng_config:/etc/searxng:rw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [vinmec_net]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── API server (stateless → scale ngang) ────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - APP_NAME=VinmecPrep AI
+      - APP_VERSION=2.0.0
+      - AGENT_API_KEY=${AGENT_API_KEY:-}
+      - TRAINER_API_KEY=${TRAINER_API_KEY:-}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme_redis_pass}@redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_JOBS=vinmec.chat.jobs
+      - KAFKA_TOPIC_RESULTS=vinmec.chat.results
+      - KAFKA_PARTITIONS=5
+      - SEARXNG_URL=http://searxng:8080
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_GRPC_HOST=weaviate
+      - WEAVIATE_GRPC_PORT=50051
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_WORKERS=${API_WORKERS:-4}
+      - EMBEDDING_WARMUP=${EMBEDDING_WARMUP:-1}
+      - CHAT_POLL_TIMEOUT=45
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-10}
+      - MONTHLY_BUDGET_USD=${MONTHLY_BUDGET_USD:-10.0}
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      searxng:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    command: >
+      uvicorn app.main:app
+        --host 0.0.0.0
+        --port 8000
+        --workers ${API_WORKERS:-4}
+        --timeout-keep-alive 30
+        --log-level info
+        --access-log
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [vinmec_net]
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./app/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "127.0.0.1:6666:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks: [vinmec_net]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Kafka Consumer workers (5 replicas = 5 partitions) ─
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme_redis_pass}@redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_JOBS=vinmec.chat.jobs
+      - KAFKA_TOPIC_RESULTS=vinmec.chat.results
+      - SEARXNG_URL=http://searxng:8080
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_GRPC_HOST=weaviate
+      - WEAVIATE_GRPC_PORT=50051
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      weaviate:
+        condition: service_healthy
+    command: python -m app.kafka.consumer
+    networks: [vinmec_net]
+    deploy:
+      replicas: ${CONSUMER_REPLICAS:-5}
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  vinmec_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  kafka_data:
+  weaviate_data:

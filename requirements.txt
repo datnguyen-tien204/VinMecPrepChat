@@ -1,0 +1,42 @@
+# ============================================================
+# VinmecPrep AI – requirements.txt (Day 12 edition)
+# Pinned versions cho reproducibility
+# ============================================================
+
+# ── LLM / Agent ──────────────────────────────────────────
+langchain==0.3.14
+langchain-core==0.3.29
+langchain-community==0.3.14
+langchain-groq==0.2.3
+litellm
+langgraph==0.2.60
+
+# ── Vector Database ───────────────────────────────────────
+weaviate-client==4.9.3
+
+# ── Web Search ────────────────────────────────────────────
+requests==2.32.3
+ddgs==9.14.0
+readability-lxml==0.8.1
+markdownify==0.13.1
+
+# ── Queue & Cache ─────────────────────────────────────────
+redis==5.2.0            # includes redis.asyncio
+hiredis==3.0.0          # C parser → ~10x faster Redis parsing
+aiokafka==0.11.0
+
+# ── API Server ────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+httpx      
+
+# ── Utilities ─────────────────────────────────────────────
+python-dotenv==1.0.1
+pydantic==2.10.3
+psutil==6.1.0           # resource monitoring
+tabulate==0.9.0
+colorama==0.4.6
+
+# ── Error tracking (optional) ─────────────────────────────
+sentry-sdk[fastapi]==2.19.0

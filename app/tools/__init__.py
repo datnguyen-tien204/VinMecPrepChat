@@ -1,0 +1,1 @@
+from app.tools.hospital_finder import VINMEC_HOSPITAL_TOOLS
